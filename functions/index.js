@@ -91,77 +91,62 @@ app.get('/verify-auth', verifyAuth, (req, res) => {
 
 // Protected routes
 app.get('/api/calendar-data', verifyAuth, (req, res) => {
-    try {
-        res.json(calendarData);
-    } catch (error) {
-        console.error('Error loading calendar data:', error);
-        res.status(500).json({ error: 'Failed to load calendar data' });
-    }
+    res.json(calendarData);
 });
 
 app.get('/api/door/:day', verifyAuth, (req, res) => {
     const day = parseInt(req.params.day);
     console.log('Fetching data for door:', day);
     
-    try {
-        if (!calendarData[day.toString()]) {
-            console.log('Door not found:', day);
-            return res.status(404).json({ error: 'Door not found' });
-        }
-        
-        const doorData = calendarData[day.toString()];
-        console.log('Found door data:', doorData);
-        
-        res.json({
-            day: day,
-            legend: doorData.legend
-        });
-    } catch (error) {
-        console.error('Error serving door data:', error);
-        res.status(500).json({ error: 'Failed to load calendar data' });
+    if (!calendarData[day.toString()]) {
+        console.log('Door not found:', day);
+        return res.status(404).json({ error: 'Door not found' });
     }
+    
+    const doorData = calendarData[day.toString()];
+    console.log('Found door data:', doorData);
+    
+    res.json({
+        day: day,
+        legend: doorData.legend
+    });
 });
 
 app.get('/api/door/:day/image', verifyAuth, (req, res) => {
     const day = parseInt(req.params.day);
     console.log('Fetching image for door:', day);
     
-    try {
-        if (!calendarData[day.toString()]) {
-            console.log('Door not found:', day);
-            return res.status(404).json({ error: 'Door not found' });
-        }
-
-        // Look for image file with different extensions
-        const possiblePaths = [
-            path.join(__dirname, './private/data')
-        ];
-        const possibleExtensions = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG'];
-        let imagePath = null;
-
-        for (const basePath of possiblePaths) {
-            for (const ext of possibleExtensions) {
-                const testPath = path.join(basePath, `${day}${ext}`);
-                console.log('Checking path:', testPath);
-                if (fs.existsSync(testPath)) {
-                    imagePath = testPath;
-                    break;
-                }
-            }
-            if (imagePath) break;
-        }
-
-        if (!imagePath) {
-            console.log('Image not found for door:', day);
-            return res.status(404).json({ error: 'Image not found' });
-        }
-
-        console.log('Serving image:', imagePath);
-        res.sendFile(imagePath);
-    } catch (error) {
-        console.error('Error serving image:', error);
-        res.status(500).json({ error: 'Failed to load image' });
+    if (!calendarData[day.toString()]) {
+        console.log('Door not found:', day);
+        return res.status(404).json({ error: 'Door not found' });
     }
+
+    // Look for image file with different extensions
+    const possiblePaths = [
+        path.join(__dirname, './private/data')
+    ];
+    const possibleExtensions = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG'];
+    let imagePath = null;
+
+    for (const basePath of possiblePaths) {
+        for (const ext of possibleExtensions) {
+            const testPath = path.join(basePath, `${day}${ext}`);
+            console.log('Checking path:', testPath);
+            if (fs.existsSync(testPath)) {
+                imagePath = testPath;
+                break;
+            }
+        }
+        if (imagePath) break;
+    }
+
+    if (!imagePath) {
+        console.log('Image not found for door:', day);
+        return res.status(404).json({ error: 'Image not found' });
+    }
+
+    console.log('Serving image:', imagePath);
+    res.sendFile(imagePath);
 });
 
 // Export the Express app as a Firebase Cloud Function

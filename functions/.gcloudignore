@@ -1,0 +1,17 @@
+# Ignore test files
+**/*.test.js
+**/*.spec.js
+
+# Ignore development files
+.git/
+.gitignore
+README.md
+*.log
+
+# Ignore local development files
+*.local
+node_modules/
+
+# Keep only production dependencies
+!node_modules/*/dist/
+!node_modules/*/build/
