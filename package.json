@@ -1,0 +1,12 @@
+{
+  "name": "advent-calendar",
+  "version": "1.0.0",
+  "description": "A secure advent calendar web application",
+  "scripts": {
+    "start": "firebase emulators:start",
+    "deploy": "firebase deploy"
+  },
+  "dependencies": {
+    "firebase-tools": "^13.0.2"
+  }
+}
