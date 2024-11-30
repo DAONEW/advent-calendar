@@ -75,3 +75,6 @@ functions/secrets.js
 functions/private/
 functions/private/data/*
 !functions/private/data/calendar.example.json
+
+# Local files
+*.local

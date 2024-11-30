@@ -4,7 +4,9 @@
   "description": "A secure advent calendar web application",
   "scripts": {
     "start": "firebase emulators:start",
-    "deploy": "firebase deploy"
+    "logs": "firebase functions:log",
+    "deployf": "firebase deploy",
+    "deploy": "git add . && git commit -m \"Deploy update $(date '+%Y-%m-%d %H:%M:%S')\" && git push && npm run deploy"
   },
   "dependencies": {
     "firebase-tools": "^13.0.2"
