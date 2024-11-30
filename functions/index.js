@@ -48,9 +48,8 @@ app.post('/auth', (req, res) => {
         return res.status(401).json({ error: 'Invalid password' });
     }
 
-    // Create JWT token with 24-hour expiration
     try {
-        const token = jwt.sign({ authenticated: true }, 'your-secret-key', { expiresIn: '24h' });
+        const token = jwt.sign({ authenticated: true }, 'your-secret-key', { expiresIn: '30d' });
         console.log('JWT token generated successfully');
         res.json({ success: true, token });
     } catch (error) {
