@@ -26,10 +26,13 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.removeItem('authToken');
         location.reload();
     });
+
     
     // Focus the password input with a slight delay on mobile
     setTimeout(() => {
         passwordInput.focus();
+        // Scroll to ensure the input is visible
+        passwordInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 400);
 
     // Handle input focus on overlay click
@@ -183,7 +186,6 @@ function showPasswordOverlay() {
 function hidePasswordOverlay() {
     passwordOverlay.style.display = 'none';
     mainContent.style.display = 'block';
-    document.getElementById('logoutButton').style.display = 'block';
     
     // Enable dark mode by default
     document.body.classList.add('dark-mode');
@@ -192,7 +194,8 @@ function hidePasswordOverlay() {
         themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
     }
     
-    // Start animations for dark mode
+    // Start animations
+    startRandomSwirl();
     startSnowfall();
     startShootingStars();
 }
