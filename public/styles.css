@@ -267,6 +267,29 @@ h1 {
     color: #fff;
 }
 
+.logout-button {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+    background: none;
+    border: none;
+    color: #333;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    transition: transform 0.3s ease;
+}
+
+.dark-mode .logout-button {
+    color: #fff;
+}
+
+.logout-button:hover {
+    transform: scale(1.1);
+}
+
 @keyframes swirl {
     0% {
         transform: rotate(0deg);

@@ -14,6 +14,19 @@ const mainContent = document.getElementById('mainContent');
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, setting up event listeners');
     
+    // Set impressum content
+    document.getElementById('authors').textContent = siteConfig.authors;
+    const sourceLink = document.getElementById('sourceLink');
+    sourceLink.href = siteConfig.sourceUrl;
+    sourceLink.textContent = siteConfig.sourceUrl;
+    
+    // Setup logout button
+    const logoutButton = document.getElementById('logoutButton');
+    logoutButton.addEventListener('click', () => {
+        localStorage.removeItem('authToken');
+        location.reload();
+    });
+    
     // Focus the password input with a slight delay on mobile
     setTimeout(() => {
         passwordInput.focus();
@@ -170,12 +183,7 @@ function showPasswordOverlay() {
 function hidePasswordOverlay() {
     passwordOverlay.style.display = 'none';
     mainContent.style.display = 'block';
-    
-    // Set impressum content
-    document.getElementById('authors').textContent = siteConfig.authors;
-    const sourceLink = document.getElementById('sourceLink');
-    sourceLink.href = siteConfig.sourceUrl;
-    sourceLink.textContent = siteConfig.sourceUrl;
+    document.getElementById('logoutButton').style.display = 'block';
     
     // Enable dark mode by default
     document.body.classList.add('dark-mode');
