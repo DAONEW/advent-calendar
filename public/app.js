@@ -3,12 +3,68 @@ const auth = firebase.auth();
 
 let calendarData = null;
 let authToken = localStorage.getItem('authToken');
+let availableYears = [];
+let currentYear = null;
+let isYearMenuOpen = false;
 
 // Password protection
 const passwordInput = document.getElementById('passwordInput');
 const submitButton = document.getElementById('submitPassword');
 const passwordOverlay = document.getElementById('passwordOverlay');
 const mainContent = document.getElementById('mainContent');
+const yearSelectWrapper = document.getElementById('yearSelectWrapper');
+const yearSelectToggle = document.getElementById('yearSelectToggle');
+const yearSelectLabel = document.getElementById('yearSelectLabel');
+const yearSelectList = document.getElementById('yearSelectList');
+
+const closeYearMenu = () => {
+    if (!isYearMenuOpen) {
+        return;
+    }
+
+    isYearMenuOpen = false;
+    if (yearSelectList) {
+        yearSelectList.classList.remove('open');
+    }
+    if (yearSelectToggle) {
+        yearSelectToggle.setAttribute('aria-expanded', 'false');
+    }
+};
+
+const openYearMenu = () => {
+    if (isYearMenuOpen || !yearSelectList || !yearSelectToggle) {
+        return;
+    }
+
+    isYearMenuOpen = true;
+    yearSelectList.classList.add('open');
+    yearSelectToggle.setAttribute('aria-expanded', 'true');
+};
+
+const toggleYearMenu = () => {
+    if (isYearMenuOpen) {
+        closeYearMenu();
+    } else {
+        openYearMenu();
+    }
+};
+
+async function handleYearSelection(year) {
+    if (!year || year === currentYear) {
+        closeYearMenu();
+        return;
+    }
+
+    currentYear = year;
+    localStorage.setItem('selectedYear', currentYear);
+    closeYearMenu();
+
+    try {
+        await loadCalendarData();
+    } catch (error) {
+        console.error('Failed to switch calendar year:', error);
+    }
+}
 
 // Initialize everything when the page loads
 document.addEventListener('DOMContentLoaded', () => {
@@ -69,10 +125,107 @@ document.addEventListener('DOMContentLoaded', () => {
             modal.style.display = 'none';
         }
     });
+
+    if (yearSelectToggle && yearSelectList) {
+        yearSelectToggle.addEventListener('click', toggleYearMenu);
+    }
+
+    document.addEventListener('click', (event) => {
+        if (!isYearMenuOpen) {
+            return;
+        }
+
+        if (yearSelectWrapper && !yearSelectWrapper.contains(event.target)) {
+            closeYearMenu();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeYearMenu();
+        }
+    });
     
     // Check if already authenticated
     checkAuth();
 });
+
+const updateYearSelectOptions = () => {
+    if (!yearSelectList) {
+        if (yearSelectLabel) {
+            yearSelectLabel.textContent = currentYear || 'Year';
+        }
+        return;
+    }
+
+    yearSelectList.innerHTML = '';
+    availableYears.forEach((year) => {
+        const option = document.createElement('li');
+        option.textContent = year;
+        option.dataset.year = year;
+        option.setAttribute('role', 'option');
+        option.tabIndex = -1;
+        option.className = 'year-option';
+
+        if (year === currentYear) {
+            option.classList.add('active');
+        }
+
+        option.addEventListener('click', () => {
+            handleYearSelection(year);
+        });
+
+        yearSelectList.appendChild(option);
+    });
+
+    if (yearSelectLabel) {
+        yearSelectLabel.textContent = currentYear || 'Year';
+    }
+};
+
+const loadAvailableYears = async () => {
+    console.log('Loading available years...');
+    const response = await fetch('/api/available-years', {
+        headers: {
+            'Authorization': `Bearer ${authToken}`
+        }
+    });
+
+    if (!response.ok) {
+        if (response.status === 401) {
+            showPasswordOverlay();
+        }
+        throw new Error('Failed to fetch available years');
+    }
+
+    const data = await response.json();
+    availableYears = (data.years || [])
+        .map((year) => year.toString())
+        .sort((a, b) => b.localeCompare(a));
+
+    if (!availableYears.length) {
+        throw new Error('No calendar years available');
+    }
+
+    const storedYear = localStorage.getItem('selectedYear');
+    if (storedYear && availableYears.includes(storedYear)) {
+        currentYear = storedYear;
+    } else {
+        currentYear = availableYears[0];
+        localStorage.setItem('selectedYear', currentYear);
+    }
+
+    updateYearSelectOptions();
+};
+
+const initializeCalendarView = async () => {
+    try {
+        await loadAvailableYears();
+        await loadCalendarData();
+    } catch (error) {
+        console.error('Failed to initialize calendar view:', error);
+    }
+};
 
 // Check if already authenticated
 const checkAuth = async () => {
@@ -99,7 +252,7 @@ const checkAuth = async () => {
         if (data.authenticated) {
             console.log('Token verified successfully');
             hidePasswordOverlay();
-            await loadCalendarData();
+            await initializeCalendarView();
         } else {
             console.log('Token verification failed');
             localStorage.removeItem('authToken');
@@ -141,7 +294,7 @@ async function checkPassword() {
             authToken = data.token;
             localStorage.setItem('authToken', authToken);
             hidePasswordOverlay();
-            await loadCalendarData();
+            await initializeCalendarView();
         } else {
             console.error('Login failed:', data.error);
             throw new Error(data.error || 'Login failed');
@@ -159,18 +312,42 @@ async function checkPassword() {
 }
 
 async function loadCalendarData() {
+    if (!currentYear) {
+        console.warn('No year selected, attempting to use most recent available year');
+        if (availableYears.length) {
+            currentYear = availableYears[0];
+        } else {
+            await loadAvailableYears();
+        }
+    }
+
     try {
-        console.log('Loading calendar data...');
-        const response = await fetch('/api/calendar-data', {
+        console.log(`Loading calendar data for ${currentYear}...`);
+        const query = currentYear ? `?year=${currentYear}` : '';
+        const response = await fetch(`/api/calendar-data${query}`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        console.log('Calendar data response:', response.status);
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                showPasswordOverlay();
+            }
+            throw new Error(`Failed to load calendar data (${response.status})`);
+        }
+
         const data = await response.json();
         console.log('Calendar data received:', data);
-        calendarData = data; // Store the data globally
-        createCalendar(data);
+        calendarData = data.doors || {};
+
+        if (data.year && data.year !== currentYear) {
+            currentYear = data.year;
+            localStorage.setItem('selectedYear', currentYear);
+        }
+
+        updateYearSelectOptions();
+        createCalendar();
     } catch (error) {
         console.error('Error loading calendar data:', error);
     }
@@ -201,10 +378,14 @@ function hidePasswordOverlay() {
 }
 
 // Create calendar grid
-function createCalendar(data) {
+function createCalendar() {
     const grid = document.getElementById('calendar-grid');
     grid.innerHTML = ''; // Clear existing content
-    const today = new Date();
+    
+    if (!calendarData) {
+        grid.innerHTML = '<p class="calendar-empty">No calendar data available.</p>';
+        return;
+    }
 
     // Festive icons for each door
     const icons = [
@@ -245,7 +426,14 @@ function createCalendar(data) {
         dayNumber.textContent = i;
         door.appendChild(dayNumber);
         
-        if (today.getMonth() !== 11 || (today.getDate()) < i) {
+        const locked = isDoorLocked(i);
+        const doorData = calendarData[i.toString()];
+
+        if (doorData?.legend) {
+            door.title = doorData.legend;
+        }
+
+        if (locked) {
             door.classList.add('unavailable');
         } else {
             door.addEventListener('click', () => openDoor(i));
@@ -260,13 +448,40 @@ function createCalendar(data) {
     }
 }
 
+function isDoorLocked(day) {
+    if (!currentYear) {
+        return true;
+    }
+
+    const viewingYear = parseInt(currentYear, 10);
+    if (Number.isNaN(viewingYear)) {
+        return true;
+    }
+
+    const now = new Date();
+    if (viewingYear < now.getFullYear()) {
+        return false;
+    }
+
+    if (viewingYear > now.getFullYear()) {
+        return true;
+    }
+
+    if (now.getMonth() !== 10) {
+        return true;
+    }
+
+    return now.getDate() < day;
+}
+
 // Handle door opening
 async function openDoor(day) {
     try {
         console.log('Opening door:', day);
+        const yearQuery = currentYear ? `?year=${currentYear}` : '';
 
         // First get the door data
-        const response = await fetch(`/api/door/${day}`, {
+        const response = await fetch(`/api/door/${day}${yearQuery}`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
@@ -294,7 +509,7 @@ async function openDoor(day) {
 
         // Now fetch the image
         console.log('Fetching image for door:', day);
-        const imageResponse = await fetch(`/api/door/${day}/image`, {
+        const imageResponse = await fetch(`/api/door/${day}/image${yearQuery}`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }

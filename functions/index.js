@@ -18,20 +18,64 @@ app.use((req, res, next) => {
     next();
 });
 
-// Load calendar data at startup
-let calendarData;
-try {
-    calendarData = require('./private/data/calendar.json');
-    console.log('Calendar data loaded successfully');
-} catch (error) {
-    console.error('Error loading calendar data:', error);
-    calendarData = {
-        doors: Array(24).fill({
-            text: "Default message",
-            image: "default.jpg"
-        })
-    };
-}
+// Calendar data handling
+const dataDirectory = path.join(__dirname, 'private', 'data');
+let calendarStore = {};
+let availableYears = [];
+let latestYear = null;
+
+const loadCalendarStore = () => {
+    try {
+        const directoryEntries = fs.readdirSync(dataDirectory, { withFileTypes: true });
+        availableYears = directoryEntries
+            .filter(entry => entry.isDirectory() && /^\d{4}$/.test(entry.name))
+            .map(entry => entry.name)
+            .sort((a, b) => a.localeCompare(b));
+
+        calendarStore = {};
+        availableYears.forEach(year => {
+            const calendarPath = path.join(dataDirectory, year, 'calendar.json');
+            if (!fs.existsSync(calendarPath)) {
+                console.warn(`calendar.json not found for year ${year}`);
+                return;
+            }
+
+            try {
+                const fileContents = fs.readFileSync(calendarPath, 'utf8');
+                const normalized = fileContents.replace(/^\uFEFF/, '');
+                calendarStore[year] = JSON.parse(normalized);
+            } catch (error) {
+                console.error(`Failed to parse calendar data for ${year}:`, error);
+            }
+        });
+
+        latestYear = availableYears[availableYears.length - 1] || null;
+        console.log(`Loaded calendar data for years: ${availableYears.join(', ')}`);
+    } catch (error) {
+        console.error('Error loading calendar directories:', error);
+        calendarStore = {};
+        availableYears = [];
+        latestYear = null;
+    }
+};
+
+const getRequestedYear = (req) => {
+    const requestedYear = req.params.year || req.query.year;
+    if (requestedYear && calendarStore[requestedYear]) {
+        return requestedYear;
+    }
+    return latestYear;
+};
+
+const getCalendarForRequest = (req) => {
+    const year = getRequestedYear(req);
+    if (!year || !calendarStore[year]) {
+        return null;
+    }
+    return { year, calendar: calendarStore[year] };
+};
+
+loadCalendarStore();
 
 // Authentication endpoint
 app.post('/auth', (req, res) => {
@@ -89,58 +133,79 @@ app.get('/verify-auth', verifyAuth, (req, res) => {
 });
 
 // Protected routes
-app.get('/api/calendar-data', verifyAuth, (req, res) => {
-    res.json(calendarData);
+app.get('/api/available-years', verifyAuth, (req, res) => {
+    res.json({ years: availableYears });
 });
 
-app.get('/api/door/:day', verifyAuth, (req, res) => {
-    const day = parseInt(req.params.day);
+app.get('/api/calendar-data', verifyAuth, (req, res) => {
+    const result = getCalendarForRequest(req);
+    if (!result) {
+        return res.status(404).json({ error: 'Calendar data unavailable' });
+    }
+
+    res.json({
+        year: result.year,
+        doors: result.calendar
+    });
+});
+
+const doorRoutes = ['/api/door/:day', '/api/year/:year/door/:day'];
+app.get(doorRoutes, verifyAuth, (req, res) => {
+    const day = parseInt(req.params.day, 10);
     console.log('Fetching data for door:', day);
-    
-    if (!calendarData[day.toString()]) {
-        console.log('Door not found:', day);
+
+    const result = getCalendarForRequest(req);
+    if (!result) {
+        console.log('No calendar data for request');
+        return res.status(404).json({ error: 'Calendar data unavailable' });
+    }
+
+    const doorData = result.calendar[day?.toString()];
+    if (!doorData) {
+        console.log(`Door not found for year ${result.year}:`, day);
         return res.status(404).json({ error: 'Door not found' });
     }
-    
-    const doorData = calendarData[day.toString()];
+
     console.log('Found door data:', doorData);
-    
     res.json({
-        day: day,
+        year: result.year,
+        day,
         legend: doorData.legend
     });
 });
 
-app.get('/api/door/:day/image', verifyAuth, (req, res) => {
-    const day = parseInt(req.params.day);
+const doorImageRoutes = ['/api/door/:day/image', '/api/year/:year/door/:day/image'];
+app.get(doorImageRoutes, verifyAuth, (req, res) => {
+    const day = parseInt(req.params.day, 10);
     console.log('Fetching image for door:', day);
-    
-    if (!calendarData[day.toString()]) {
-        console.log('Door not found:', day);
+
+    const result = getCalendarForRequest(req);
+    if (!result) {
+        console.log('No calendar data for request');
+        return res.status(404).json({ error: 'Calendar data unavailable' });
+    }
+
+    const doorDataExists = result.calendar[day?.toString()];
+    if (!doorDataExists) {
+        console.log(`Door not found for year ${result.year}:`, day);
         return res.status(404).json({ error: 'Door not found' });
     }
 
-    // Look for image file with different extensions
-    const possiblePaths = [
-        path.join(__dirname, './private/data')
-    ];
+    const basePath = path.join(dataDirectory, result.year);
     const possibleExtensions = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG'];
     let imagePath = null;
 
-    for (const basePath of possiblePaths) {
-        for (const ext of possibleExtensions) {
-            const testPath = path.join(basePath, `${day}${ext}`);
-            console.log('Checking path:', testPath);
-            if (fs.existsSync(testPath)) {
-                imagePath = testPath;
-                break;
-            }
+    for (const ext of possibleExtensions) {
+        const testPath = path.join(basePath, `${day}${ext}`);
+        console.log('Checking path:', testPath);
+        if (fs.existsSync(testPath)) {
+            imagePath = testPath;
+            break;
         }
-        if (imagePath) break;
     }
 
     if (!imagePath) {
-        console.log('Image not found for door:', day);
+        console.log(`Image not found for year ${result.year}, door:`, day);
         return res.status(404).json({ error: 'Image not found' });
     }
 

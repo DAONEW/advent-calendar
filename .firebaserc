@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "norasadvent"
-  }
+    "default": "norasadvent",
+    "firebaserc": "norasadvent"
+  },
+  "targets": {},
+  "etags": {}
 }
