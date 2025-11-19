@@ -170,7 +170,8 @@ app.get(doorRoutes, verifyAuth, (req, res) => {
     res.json({
         year: result.year,
         day,
-        legend: doorData.legend
+        legend: doorData.legend,
+        hasVideo: Boolean(doorData.video)
     });
 });
 
@@ -192,7 +193,14 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
     }
 
     const basePath = path.join(dataDirectory, result.year);
-    const possibleExtensions = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG'];
+    const possibleExtensions = [
+        '.jpg', '.JPG',
+        '.jpeg', '.JPEG',
+        '.png', '.PNG',
+        '.mp4', '.MP4',
+        '.heic', '.HEIC',
+        '.heif', '.HEIF'
+    ];
     let imagePath = null;
 
     for (const ext of possibleExtensions) {
@@ -209,8 +217,58 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
         return res.status(404).json({ error: 'Image not found' });
     }
 
+    const detectedExtension = path.extname(imagePath).toLowerCase();
+    if (detectedExtension === '.heic' || detectedExtension === '.heif') {
+        res.type('image/heic');
+    }
+
     console.log('Serving image:', imagePath);
     res.sendFile(imagePath);
+});
+
+const doorVideoRoutes = ['/api/door/:day/video', '/api/year/:year/door/:day/video'];
+app.get(doorVideoRoutes, verifyAuth, (req, res) => {
+    const day = parseInt(req.params.day, 10);
+    console.log('Fetching video for door:', day);
+
+    const result = getCalendarForRequest(req);
+    if (!result) {
+        console.log('No calendar data for request');
+        return res.status(404).json({ error: 'Calendar data unavailable' });
+    }
+
+    const doorData = result.calendar[day?.toString()];
+    if (!doorData) {
+        console.log(`Door not found for year ${result.year}:`, day);
+        return res.status(404).json({ error: 'Door not found' });
+    }
+
+    if (!doorData.video) {
+        console.log(`Video not flagged for year ${result.year}, door:`, day);
+        return res.status(404).json({ error: 'Video not available' });
+    }
+
+    const basePath = path.join(dataDirectory, result.year);
+    const possibleVideoExtensions = ['.mp4', '.MP4'];
+    let videoPath = null;
+
+    for (const ext of possibleVideoExtensions) {
+        const testPath = path.join(basePath, `${day}${ext}`);
+        console.log('Checking video path:', testPath);
+        if (fs.existsSync(testPath)) {
+            videoPath = testPath;
+            break;
+        }
+    }
+
+    if (!videoPath) {
+        console.log(`Video not found for year ${result.year}, door:`, day);
+        return res.status(404).json({ error: 'Video not found' });
+    }
+
+    console.log('Serving video:', videoPath);
+    res.type('video/mp4');
+    res.sendFile(videoPath);
 });
 
 // Export the Express app as a Firebase Cloud Function

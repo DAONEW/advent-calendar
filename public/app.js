@@ -6,6 +6,7 @@ let authToken = localStorage.getItem('authToken');
 let availableYears = [];
 let currentYear = null;
 let isYearMenuOpen = false;
+const YEAR_THEME_CLASS_PREFIX = 'calendar-year-';
 
 // Password protection
 const passwordInput = document.getElementById('passwordInput');
@@ -16,6 +17,201 @@ const yearSelectWrapper = document.getElementById('yearSelectWrapper');
 const yearSelectToggle = document.getElementById('yearSelectToggle');
 const yearSelectLabel = document.getElementById('yearSelectLabel');
 const yearSelectList = document.getElementById('yearSelectList');
+const imageModal = document.getElementById('imageModal');
+const modalContent = document.querySelector('.modal-content');
+const modalImage = document.getElementById('modalImage');
+const modalVideo = document.getElementById('modalVideo');
+const modalLegend = document.getElementById('modalLegend');
+const modalNotice = document.getElementById('modalNotice');
+const mediaToggleButton = document.getElementById('mediaToggleButton');
+
+let trackedMediaUrls = [];
+let currentDoorDay = null;
+let currentDoorHasVideo = false;
+let currentDoorImageUrl = null;
+let currentDoorVideoUrl = null;
+let isVideoVisible = false;
+let isVideoLoading = false;
+
+function applyYearTheme(year) {
+    const body = document.body;
+    if (!body) {
+        return;
+    }
+
+    Array.from(body.classList)
+        .filter((cls) => cls.startsWith(YEAR_THEME_CLASS_PREFIX))
+        .forEach((cls) => body.classList.remove(cls));
+
+    if (year) {
+        body.classList.add(`${YEAR_THEME_CLASS_PREFIX}${year}`);
+    }
+}
+
+function trackMediaUrl(url) {
+    if (url) {
+        trackedMediaUrls.push(url);
+    }
+}
+
+function resetModalMedia() {
+    if (modalVideo) {
+        modalVideo.pause();
+        modalVideo.removeAttribute('src');
+        modalVideo.load();
+        modalVideo.style.display = 'none';
+    }
+
+    if (modalImage) {
+        modalImage.src = '';
+        modalImage.style.display = 'none';
+    }
+
+    if (modalNotice) {
+        modalNotice.textContent = '';
+    }
+
+    trackedMediaUrls.forEach(url => URL.revokeObjectURL(url));
+    trackedMediaUrls = [];
+    currentDoorDay = null;
+    currentDoorHasVideo = false;
+    currentDoorImageUrl = null;
+    currentDoorVideoUrl = null;
+    isVideoVisible = false;
+    isVideoLoading = false;
+
+    if (mediaToggleButton) {
+        mediaToggleButton.hidden = true;
+        mediaToggleButton.disabled = false;
+        mediaToggleButton.classList.remove('media-toggle--active');
+        mediaToggleButton.setAttribute('aria-pressed', 'false');
+        setMediaToggleButtonState('play');
+    }
+}
+
+function setMediaToggleButtonState(state) {
+    if (!mediaToggleButton) {
+        return;
+    }
+
+    let iconClasses = 'fa-play';
+    let label = 'Play live photo';
+    let active = false;
+    let disabled = false;
+
+    if (state === 'loading') {
+        iconClasses = 'fa-circle-notch fa-spin';
+        label = 'Loading video';
+        disabled = true;
+    } else if (state === 'show-image') {
+        iconClasses = 'fa-image';
+        label = 'Show photo';
+        active = true;
+    }
+
+    mediaToggleButton.disabled = disabled;
+    mediaToggleButton.classList.toggle('media-toggle--active', active);
+    mediaToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+    mediaToggleButton.setAttribute('aria-label', label);
+    mediaToggleButton.innerHTML = `<span class="sr-only">${label}</span><i class="fas ${iconClasses}" aria-hidden="true"></i>`;
+}
+
+function showImageMedia() {
+    if (!modalImage || !currentDoorImageUrl) {
+        return;
+    }
+
+    modalImage.style.display = 'block';
+    modalImage.src = currentDoorImageUrl;
+
+    if (modalVideo) {
+        modalVideo.pause();
+        modalVideo.style.display = 'none';
+    }
+
+    isVideoVisible = false;
+    if (currentDoorHasVideo) {
+        setMediaToggleButtonState('play');
+    }
+}
+
+function showVideoMedia() {
+    if (!modalVideo || !currentDoorVideoUrl) {
+        return;
+    }
+
+    modalVideo.style.display = 'block';
+    modalVideo.src = currentDoorVideoUrl;
+    modalVideo.currentTime = 0;
+    modalVideo.play().catch(() => {});
+
+    if (modalImage) {
+        modalImage.style.display = 'none';
+    }
+
+    isVideoVisible = true;
+    if (currentDoorHasVideo) {
+        setMediaToggleButtonState('show-image');
+    }
+}
+
+async function fetchDoorVideo(day) {
+    const yearQuery = currentYear ? `?year=${currentYear}` : '';
+    const videoResponse = await fetch(`/api/door/${day}/video${yearQuery}`, {
+        headers: {
+            'Authorization': `Bearer ${authToken}`
+        }
+    });
+
+    if (!videoResponse.ok) {
+        const message = videoResponse.status === 404
+            ? 'No video is available for this day.'
+            : 'Failed to load video.';
+        throw new Error(message);
+    }
+
+    const videoBlob = await videoResponse.blob();
+    const videoUrl = URL.createObjectURL(videoBlob);
+    trackMediaUrl(videoUrl);
+    return videoUrl;
+}
+
+async function handleMediaToggleClick() {
+    if (!currentDoorHasVideo || isVideoLoading) {
+        return;
+    }
+
+    if (isVideoVisible) {
+        showImageMedia();
+        return;
+    }
+
+    try {
+        isVideoLoading = true;
+        setMediaToggleButtonState('loading');
+        if (!currentDoorVideoUrl) {
+            currentDoorVideoUrl = await fetchDoorVideo(currentDoorDay);
+        }
+        showVideoMedia();
+    } catch (error) {
+        console.error('Error loading video content:', error);
+        alert(error.message || 'Unable to load the video right now. Please try again.');
+        setMediaToggleButtonState('play');
+    } finally {
+        isVideoLoading = false;
+    }
+}
+
+if (mediaToggleButton) {
+    mediaToggleButton.addEventListener('click', handleMediaToggleClick);
+}
+
+const closeModal = () => {
+    if (imageModal) {
+        imageModal.style.display = 'none';
+    }
+    resetModalMedia();
+};
 
 const closeYearMenu = () => {
     if (!isYearMenuOpen) {
@@ -57,6 +253,7 @@ async function handleYearSelection(year) {
 
     currentYear = year;
     localStorage.setItem('selectedYear', currentYear);
+    applyYearTheme(currentYear);
     closeYearMenu();
 
     try {
@@ -115,14 +312,14 @@ document.addEventListener('DOMContentLoaded', () => {
     startRandomSwirl();
     
     // Set up modal events
-    const modal = document.getElementById('imageModal');
-    document.querySelector('.close-button').addEventListener('click', () => {
-        modal.style.display = 'none';
-    });
+    const closeButton = document.querySelector('.close-button');
+    if (closeButton) {
+        closeButton.addEventListener('click', closeModal);
+    }
     
     window.addEventListener('click', (event) => {
-        if (event.target === modal) {
-            modal.style.display = 'none';
+        if (event.target === imageModal) {
+            closeModal();
         }
     });
 
@@ -143,6 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
             closeYearMenu();
+            closeModal();
         }
     });
     
@@ -346,6 +544,7 @@ async function loadCalendarData() {
             localStorage.setItem('selectedYear', currentYear);
         }
 
+        applyYearTheme(currentYear);
         updateYearSelectOptions();
         createCalendar();
     } catch (error) {
@@ -477,6 +676,7 @@ function isDoorLocked(day) {
 // Handle door opening
 async function openDoor(day) {
     try {
+        resetModalMedia();
         console.log('Opening door:', day);
         const yearQuery = currentYear ? `?year=${currentYear}` : '';
 
@@ -507,8 +707,8 @@ async function openDoor(day) {
             throw new Error('Invalid door data');
         }
 
-        // Now fetch the image
-        console.log('Fetching image for door:', day);
+        // Now fetch the media asset (image or video)
+        console.log('Fetching media for door:', day);
         const imageResponse = await fetch(`/api/door/${day}/image${yearQuery}`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
@@ -516,60 +716,71 @@ async function openDoor(day) {
         });
 
         if (!imageResponse.ok) {
-            console.error('Image response not ok:', imageResponse.status);
-            throw new Error('Failed to load door image');
+            console.error('Media response not ok:', imageResponse.status);
+            throw new Error('Failed to load door media');
         }
 
-        // Convert the image data to blob and create URL
-        const imageBlob = await imageResponse.blob();
-        const imageUrl = URL.createObjectURL(imageBlob);
+        // Convert the media data to blob and create URL
+        const mediaBlob = await imageResponse.blob();
+        const mediaContentType = (imageResponse.headers.get('content-type') || '').toLowerCase();
+        const mediaUrl = URL.createObjectURL(mediaBlob);
+        trackMediaUrl(mediaUrl);
 
-        // Update modal content
-        const modalImg = document.getElementById('modalImage');
-        const modal = document.getElementById('imageModal');
-        const modalContent = document.querySelector('.modal-content');
-        const modalLegend = document.getElementById('modalLegend');
-        
         // Get the door's color from CSS
         const doorElement = document.querySelector(`.door[data-day="${day}"]`);
         if (!doorElement) {
             throw new Error('Door element not found');
         }
         const doorColor = getComputedStyle(doorElement).backgroundColor;
-        modalContent.style.backgroundColor = doorColor;
+        if (modalContent) {
+            modalContent.style.backgroundColor = doorColor;
+        }
+
+        const isVideoAsset = mediaContentType.startsWith('video/');
+        const isHeic = mediaContentType.includes('heic') || mediaContentType.includes('heif');
+        const videoFlag = doorData.hasVideo ?? doorData.video;
+        currentDoorDay = day;
+        currentDoorHasVideo = Boolean(videoFlag);
+        currentDoorImageUrl = isVideoAsset ? null : mediaUrl;
+        currentDoorVideoUrl = isVideoAsset ? mediaUrl : null;
+        isVideoVisible = isVideoAsset;
+        isVideoLoading = false;
+
+        if (mediaToggleButton) {
+            const canToggleToVideo = currentDoorHasVideo && !isVideoAsset;
+            mediaToggleButton.hidden = !canToggleToVideo;
+            if (canToggleToVideo) {
+                setMediaToggleButtonState('play');
+            }
+        }
+
+        if (isVideoAsset) {
+            showVideoMedia();
+        } else {
+            showImageMedia();
+        }
         
         // Set the image and legend
-        modalImg.src = imageUrl;
-        modalLegend.textContent = doorData.legend;
+        if (modalLegend) {
+            modalLegend.textContent = doorData.legend;
+        }
+        if (modalNotice) {
+            modalNotice.textContent = isHeic
+                ? 'HEIC images only render reliably in Safari/iOS. Convert to JPG or PNG for the best compatibility.'
+                : '';
+        }
         
         // Show the modal
-        modal.style.display = 'block';
-
-        // Clean up the object URL when the image is loaded
-        modalImg.onload = () => {
-            URL.revokeObjectURL(imageUrl);
-        };
+        if (imageModal) {
+            imageModal.style.display = 'block';
+        }
 
     } catch (error) {
+        resetModalMedia();
         console.error('Error opening door:', error);
         alert(error.message || 'An error occurred while opening the door. Please try again.');
     }
 }
-
-// Close modal when clicking the close button or outside the modal
-document.addEventListener('DOMContentLoaded', () => {
-    const modal = document.getElementById('imageModal');
-    
-    document.querySelector('.close-button').addEventListener('click', () => {
-        modal.style.display = 'none';
-    });
-    
-    window.addEventListener('click', (event) => {
-        if (event.target === modal) {
-            modal.style.display = 'none';
-        }
-    });
-});
 
 // Dark mode toggle
 document.getElementById('themeToggle').addEventListener('click', () => {

@@ -62,8 +62,22 @@
             <div class="modal" id="imageModal">
                 <span class="close-button">&times;</span>
                 <div class="modal-content">
-                    <img id="modalImage" src="" alt="Day Image">
+                    <div class="modal-media-wrapper">
+                        <img id="modalImage" src="" alt="Day visual">
+                        <video id="modalVideo" controls playsinline preload="metadata"></video>
+                        <button
+                            id="mediaToggleButton"
+                            class="media-toggle"
+                            type="button"
+                            hidden
+                            aria-pressed="false"
+                        >
+                            <span class="sr-only">Play live photo</span>
+                            <i class="fas fa-play" aria-hidden="true"></i>
+                        </button>
+                    </div>
                     <p id="modalLegend" class="legend"></p>
+                    <p id="modalNotice" class="media-note" aria-live="polite"></p>
                 </div>
             </div>
         </div>
