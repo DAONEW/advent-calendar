@@ -25,13 +25,26 @@ const modalLegend = document.getElementById('modalLegend');
 const modalNotice = document.getElementById('modalNotice');
 const mediaToggleButton = document.getElementById('mediaToggleButton');
 
+const MOBILE_PRELOAD_DELAY_MS = 150;
+const calendarPrefetchCache = new Map();
+const mobilePreviewCacheByYear = new Map();
+let activeMobilePrefetchYear = null;
+let mobilePrefetchGeneration = 0;
 let trackedMediaUrls = [];
+
+function normalizeYear(year) {
+    if (year === undefined || year === null) {
+        return null;
+    }
+    return year.toString();
+}
 let currentDoorDay = null;
 let currentDoorHasVideo = false;
 let currentDoorImageUrl = null;
 let currentDoorVideoUrl = null;
 let isVideoVisible = false;
 let isVideoLoading = false;
+let activeDoorRequestId = 0;
 
 function applyYearTheme(year) {
     const body = document.body;
@@ -114,6 +127,104 @@ function setMediaToggleButtonState(state) {
     mediaToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
     mediaToggleButton.setAttribute('aria-label', label);
     mediaToggleButton.innerHTML = `<span class="sr-only">${label}</span><i class="fas ${iconClasses}" aria-hidden="true"></i>`;
+}
+
+function getMobilePreviewCache(year, { create = true } = {}) {
+    const normalizedYear = normalizeYear(year);
+    if (!normalizedYear) {
+        return null;
+    }
+
+    if (!mobilePreviewCacheByYear.has(normalizedYear)) {
+        if (!create) {
+            return null;
+        }
+        mobilePreviewCacheByYear.set(normalizedYear, new Map());
+    }
+
+    return mobilePreviewCacheByYear.get(normalizedYear);
+}
+
+function prefetchCalendarJson(year) {
+    const normalizedYear = normalizeYear(year) ?? normalizeYear(currentYear);
+    if (!normalizedYear || !authToken) {
+        return null;
+    }
+
+    if (!calendarPrefetchCache.has(normalizedYear)) {
+        calendarPrefetchCache.set(normalizedYear, { data: null, promise: null });
+    }
+
+    const cacheEntry = calendarPrefetchCache.get(normalizedYear);
+    if (cacheEntry.data) {
+        return Promise.resolve(cacheEntry.data);
+    }
+
+    if (!cacheEntry.promise) {
+        const query = normalizedYear ? `?year=${normalizedYear}` : '';
+        cacheEntry.promise = fetch(`/api/calendar-data${query}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        }).then((response) => {
+            if (!response.ok) {
+                if (response.status === 401) {
+                    showPasswordOverlay();
+                }
+                throw new Error(`Failed to load calendar data (${response.status})`);
+            }
+            return response.json();
+        }).then((data) => {
+            const resolvedYear = normalizeYear(data.year) || normalizedYear;
+            cacheEntry.data = data;
+            cacheEntry.promise = null;
+            if (resolvedYear !== normalizedYear) {
+                calendarPrefetchCache.set(resolvedYear, { data, promise: null });
+            }
+            return data;
+        }).catch((error) => {
+            cacheEntry.promise = null;
+            calendarPrefetchCache.delete(normalizedYear);
+            throw error;
+        });
+    }
+
+    return cacheEntry.promise;
+}
+
+function startMobilePrefetch(year) {
+    const normalizedYear = normalizeYear(year);
+    if (!normalizedYear || !authToken) {
+        return;
+    }
+
+    activeMobilePrefetchYear = normalizedYear;
+    mobilePrefetchGeneration += 1;
+    const generationId = mobilePrefetchGeneration;
+    const yearCache = getMobilePreviewCache(normalizedYear);
+
+    for (let day = 1; day <= 24; day++) {
+        if (yearCache?.has(day)) {
+            continue;
+        }
+
+        setTimeout(() => {
+            if (generationId !== mobilePrefetchGeneration || activeMobilePrefetchYear !== normalizedYear) {
+                return;
+            }
+            void preloadMobilePreview(day, { year: normalizedYear, generation: generationId });
+        }, (day - 1) * MOBILE_PRELOAD_DELAY_MS);
+    }
+}
+
+function startYearPrefetch(year) {
+    const normalizedYear = normalizeYear(year);
+    if (!normalizedYear || !authToken) {
+        return;
+    }
+
+    prefetchCalendarJson(normalizedYear);
+    startMobilePrefetch(normalizedYear);
 }
 
 function showImageMedia() {
@@ -520,28 +631,22 @@ async function loadCalendarData() {
     }
 
     try {
+        currentYear = normalizeYear(currentYear);
+        startYearPrefetch(currentYear);
         console.log(`Loading calendar data for ${currentYear}...`);
-        const query = currentYear ? `?year=${currentYear}` : '';
-        const response = await fetch(`/api/calendar-data${query}`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-
-        if (!response.ok) {
-            if (response.status === 401) {
-                showPasswordOverlay();
-            }
-            throw new Error(`Failed to load calendar data (${response.status})`);
+        const data = await prefetchCalendarJson(currentYear);
+        if (!data) {
+            throw new Error('Calendar data unavailable');
         }
 
-        const data = await response.json();
         console.log('Calendar data received:', data);
         calendarData = data.doors || {};
 
-        if (data.year && data.year !== currentYear) {
-            currentYear = data.year;
+        const resolvedYear = normalizeYear(data.year);
+        if (resolvedYear && resolvedYear !== currentYear) {
+            currentYear = resolvedYear;
             localStorage.setItem('selectedYear', currentYear);
+            startYearPrefetch(currentYear);
         }
 
         applyYearTheme(currentYear);
@@ -673,12 +778,67 @@ function isDoorLocked(day) {
     return now.getDate() < day;
 }
 
+async function fetchDoorMedia(day, size, options = {}) {
+    const params = new URLSearchParams();
+    const requestedYear = normalizeYear(options.year) ?? normalizeYear(currentYear);
+    if (requestedYear) {
+        params.set('year', requestedYear);
+    }
+    if (size) {
+        params.set('size', size);
+    }
+
+    const queryString = params.toString();
+    const url = `/api/door/${day}/image${queryString ? `?${queryString}` : ''}`;
+    const response = await fetch(url, {
+        headers: {
+            'Authorization': `Bearer ${authToken}`
+        }
+    });
+
+    if (!response.ok) {
+        if (response.status === 401) {
+            showPasswordOverlay();
+            throw new Error('Unauthorized');
+        }
+        throw new Error('Failed to load door media');
+    }
+
+    const blob = await response.blob();
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    return { blob, contentType };
+}
+
+async function preloadMobilePreview(day, options = {}) {
+    const normalizedYear = normalizeYear(options.year ?? currentYear);
+    if (!normalizedYear || !authToken) {
+        return;
+    }
+
+    const cache = getMobilePreviewCache(normalizedYear);
+    if (cache?.has(day)) {
+        return;
+    }
+
+    try {
+        const media = await fetchDoorMedia(day, 'mobile', { year: normalizedYear });
+        if (options.generation && (options.generation !== mobilePrefetchGeneration || activeMobilePrefetchYear !== normalizedYear)) {
+            return;
+        }
+        getMobilePreviewCache(normalizedYear)?.set(day, media);
+    } catch (error) {
+        console.warn('Failed to preload mobile preview for door', day, error);
+    }
+}
+
 // Handle door opening
 async function openDoor(day) {
+    const requestId = ++activeDoorRequestId;
+    const doorYear = normalizeYear(currentYear);
     try {
         resetModalMedia();
         console.log('Opening door:', day);
-        const yearQuery = currentYear ? `?year=${currentYear}` : '';
+        const yearQuery = doorYear ? `?year=${doorYear}` : '';
 
         // First get the door data
         const response = await fetch(`/api/door/${day}${yearQuery}`, {
@@ -707,26 +867,7 @@ async function openDoor(day) {
             throw new Error('Invalid door data');
         }
 
-        // Now fetch the media asset (image or video)
-        console.log('Fetching media for door:', day);
-        const imageResponse = await fetch(`/api/door/${day}/image${yearQuery}`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-
-        if (!imageResponse.ok) {
-            console.error('Media response not ok:', imageResponse.status);
-            throw new Error('Failed to load door media');
-        }
-
-        // Convert the media data to blob and create URL
-        const mediaBlob = await imageResponse.blob();
-        const mediaContentType = (imageResponse.headers.get('content-type') || '').toLowerCase();
-        const mediaUrl = URL.createObjectURL(mediaBlob);
-        trackMediaUrl(mediaUrl);
-
-        // Get the door's color from CSS
+        // Prepare the modal layout
         const doorElement = document.querySelector(`.door[data-day="${day}"]`);
         if (!doorElement) {
             throw new Error('Door element not found');
@@ -735,45 +876,109 @@ async function openDoor(day) {
         if (modalContent) {
             modalContent.style.backgroundColor = doorColor;
         }
-
-        const isVideoAsset = mediaContentType.startsWith('video/');
-        const isHeic = mediaContentType.includes('heic') || mediaContentType.includes('heif');
-        const videoFlag = doorData.hasVideo ?? doorData.video;
-        currentDoorDay = day;
-        currentDoorHasVideo = Boolean(videoFlag);
-        currentDoorImageUrl = isVideoAsset ? null : mediaUrl;
-        currentDoorVideoUrl = isVideoAsset ? mediaUrl : null;
-        isVideoVisible = isVideoAsset;
-        isVideoLoading = false;
-
-        if (mediaToggleButton) {
-            const canToggleToVideo = currentDoorHasVideo && !isVideoAsset;
-            mediaToggleButton.hidden = !canToggleToVideo;
-            if (canToggleToVideo) {
-                setMediaToggleButtonState('play');
-            }
-        }
-
-        if (isVideoAsset) {
-            showVideoMedia();
-        } else {
-            showImageMedia();
-        }
-        
-        // Set the image and legend
         if (modalLegend) {
             modalLegend.textContent = doorData.legend;
         }
         if (modalNotice) {
-            modalNotice.textContent = isHeic
-                ? 'HEIC images only render reliably in Safari/iOS. Convert to JPG or PNG for the best compatibility.'
-                : '';
+            modalNotice.textContent = '';
         }
-        
-        // Show the modal
-        if (imageModal) {
-            imageModal.style.display = 'block';
+
+        console.log('Fetching media for door:', day);
+        const hasVideo = Boolean(doorData.hasVideo ?? doorData.video);
+        currentDoorHasVideo = hasVideo;
+        currentDoorDay = day;
+
+        if (mediaToggleButton) {
+            mediaToggleButton.hidden = !hasVideo;
+            if (hasVideo) {
+                mediaToggleButton.disabled = false;
+                setMediaToggleButtonState('play');
+            }
         }
+
+        let previewDisplayed = false;
+        const previewCache = getMobilePreviewCache(doorYear);
+        const previewPromise = (async () => {
+            try {
+                const cachedPreview = previewCache?.get(day);
+                const previewMedia = cachedPreview ?? await fetchDoorMedia(day, 'mobile', { year: doorYear });
+                if (!cachedPreview && previewCache) {
+                    previewCache.set(day, previewMedia);
+                }
+                if (requestId !== activeDoorRequestId) {
+                    return;
+                }
+                const previewUrl = URL.createObjectURL(previewMedia.blob);
+                trackMediaUrl(previewUrl);
+                currentDoorImageUrl = previewUrl;
+                currentDoorVideoUrl = null;
+                isVideoVisible = false;
+                isVideoLoading = false;
+                showImageMedia();
+                if (imageModal) {
+                    imageModal.style.display = 'block';
+                }
+                previewDisplayed = true;
+            } catch (previewError) {
+                console.warn('Mobile preview not available for door', day, previewError);
+            }
+        })();
+
+        const loadFullMedia = async () => {
+            try {
+                const fullMedia = await fetchDoorMedia(day, undefined, { year: doorYear });
+                if (requestId !== activeDoorRequestId) {
+                    return;
+                }
+
+                const mediaUrl = URL.createObjectURL(fullMedia.blob);
+                trackMediaUrl(mediaUrl);
+                const mediaContentType = (fullMedia.contentType || '').toLowerCase();
+                if (mediaContentType.startsWith('video/')) {
+                    console.warn(`Video asset returned for door ${day}, deferring playback until requested.`);
+                    return;
+                }
+
+                await previewPromise.catch(() => {});
+                if (requestId !== activeDoorRequestId) {
+                    return;
+                }
+
+                const isHeic = mediaContentType.includes('heic') || mediaContentType.includes('heif');
+                const swapToHighRes = () => {
+                    currentDoorImageUrl = mediaUrl;
+                    showImageMedia();
+                    if (imageModal) {
+                        imageModal.style.display = 'block';
+                    }
+                };
+
+                if (modalImage) {
+                    const highResImage = new Image();
+                    highResImage.onload = swapToHighRes;
+                    highResImage.onerror = () => {
+                        console.warn('Failed to load high resolution image for door', day);
+                    };
+                    highResImage.src = mediaUrl;
+                } else {
+                    swapToHighRes();
+                }
+
+                if (modalNotice) {
+                    modalNotice.textContent = isHeic
+                        ? 'HEIC images only render reliably in Safari/iOS. Convert to JPG or PNG for the best compatibility.'
+                        : '';
+                }
+            } catch (fullError) {
+                console.error('Failed to load door media:', fullError);
+                if (!previewDisplayed) {
+                    resetModalMedia();
+                    alert(fullError.message || 'Failed to load door media');
+                }
+            }
+        };
+
+        void loadFullMedia();
 
     } catch (error) {
         resetModalMedia();

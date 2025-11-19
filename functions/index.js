@@ -150,6 +150,7 @@ app.get('/api/calendar-data', verifyAuth, (req, res) => {
 });
 
 const doorRoutes = ['/api/door/:day', '/api/year/:year/door/:day'];
+const doorImageRoutes = ['/api/door/:day/image', '/api/year/:year/door/:day/image'];
 app.get(doorRoutes, verifyAuth, (req, res) => {
     const day = parseInt(req.params.day, 10);
     console.log('Fetching data for door:', day);
@@ -175,7 +176,6 @@ app.get(doorRoutes, verifyAuth, (req, res) => {
     });
 });
 
-const doorImageRoutes = ['/api/door/:day/image', '/api/year/:year/door/:day/image'];
 app.get(doorImageRoutes, verifyAuth, (req, res) => {
     const day = parseInt(req.params.day, 10);
     console.log('Fetching image for door:', day);
@@ -197,18 +197,26 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
         '.jpg', '.JPG',
         '.jpeg', '.JPEG',
         '.png', '.PNG',
-        '.mp4', '.MP4',
         '.heic', '.HEIC',
         '.heif', '.HEIF'
     ];
-    let imagePath = null;
+    const requestedSize = req.query.size;
+    const sizeSuffixes = [];
+    if (requestedSize === 'mobile') {
+        sizeSuffixes.push('-mobile');
+    }
+    sizeSuffixes.push('');
 
-    for (const ext of possibleExtensions) {
-        const testPath = path.join(basePath, `${day}${ext}`);
-        console.log('Checking path:', testPath);
-        if (fs.existsSync(testPath)) {
-            imagePath = testPath;
-            break;
+    let imagePath = null;
+    outer:
+    for (const suffix of sizeSuffixes) {
+        for (const ext of possibleExtensions) {
+            const testPath = path.join(basePath, `${day}${suffix}${ext}`);
+            console.log('Checking path:', testPath);
+            if (fs.existsSync(testPath)) {
+                imagePath = testPath;
+                break outer;
+            }
         }
     }
 
