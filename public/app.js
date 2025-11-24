@@ -45,6 +45,11 @@ let currentDoorVideoUrl = null;
 let isVideoVisible = false;
 let isVideoLoading = false;
 let activeDoorRequestId = 0;
+let modalShouldBeVisible = false;
+
+function cancelPendingDoorLoad() {
+    activeDoorRequestId += 1;
+}
 
 function applyYearTheme(year) {
     const body = document.body;
@@ -232,6 +237,15 @@ function showImageMedia() {
         return;
     }
 
+    if (!modalShouldBeVisible) {
+        if (modalVideo) {
+            modalVideo.pause();
+            modalVideo.style.display = 'none';
+        }
+        isVideoVisible = false;
+        return;
+    }
+
     modalImage.style.display = 'block';
     modalImage.src = currentDoorImageUrl;
 
@@ -244,10 +258,19 @@ function showImageMedia() {
     if (currentDoorHasVideo) {
         setMediaToggleButtonState('play');
     }
+
+    if (imageModal) {
+        imageModal.style.display = 'block';
+    }
 }
 
 function showVideoMedia() {
     if (!modalVideo || !currentDoorVideoUrl) {
+        return;
+    }
+
+    if (!modalShouldBeVisible) {
+        modalVideo.pause();
         return;
     }
 
@@ -263,6 +286,10 @@ function showVideoMedia() {
     isVideoVisible = true;
     if (currentDoorHasVideo) {
         setMediaToggleButtonState('show-image');
+    }
+
+    if (imageModal) {
+        imageModal.style.display = 'block';
     }
 }
 
@@ -318,6 +345,8 @@ if (mediaToggleButton) {
 }
 
 const closeModal = () => {
+    modalShouldBeVisible = false;
+    cancelPendingDoorLoad();
     if (imageModal) {
         imageModal.style.display = 'none';
     }
@@ -771,7 +800,7 @@ function isDoorLocked(day) {
         return true;
     }
 
-    if (now.getMonth() !== 10) {
+    if (now.getMonth() !== 11) {
         return true;
     }
 
@@ -884,6 +913,7 @@ async function openDoor(day) {
         }
 
         console.log('Fetching media for door:', day);
+        modalShouldBeVisible = true;
         const hasVideo = Boolean(doorData.hasVideo ?? doorData.video);
         currentDoorHasVideo = hasVideo;
         currentDoorDay = day;
@@ -915,9 +945,6 @@ async function openDoor(day) {
                 isVideoVisible = false;
                 isVideoLoading = false;
                 showImageMedia();
-                if (imageModal) {
-                    imageModal.style.display = 'block';
-                }
                 previewDisplayed = true;
             } catch (previewError) {
                 console.warn('Mobile preview not available for door', day, previewError);
@@ -946,11 +973,11 @@ async function openDoor(day) {
 
                 const isHeic = mediaContentType.includes('heic') || mediaContentType.includes('heif');
                 const swapToHighRes = () => {
+                    if (requestId !== activeDoorRequestId) {
+                        return;
+                    }
                     currentDoorImageUrl = mediaUrl;
                     showImageMedia();
-                    if (imageModal) {
-                        imageModal.style.display = 'block';
-                    }
                 };
 
                 if (modalImage) {
@@ -981,6 +1008,7 @@ async function openDoor(day) {
         void loadFullMedia();
 
     } catch (error) {
+        modalShouldBeVisible = false;
         resetModalMedia();
         console.error('Error opening door:', error);
         alert(error.message || 'An error occurred while opening the door. Please try again.');
