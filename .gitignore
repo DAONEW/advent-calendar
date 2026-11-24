@@ -78,3 +78,8 @@ functions/private/data/*
 
 # Local files
 *.local
+
+# Per-checkout Firebase project selection and local credentials.
+.firebaserc
+*service-account*.json
+*serviceAccount*.json

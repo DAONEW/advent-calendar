@@ -15,3 +15,9 @@ node_modules/
 # Keep only production dependencies
 !node_modules/*/dist/
 !node_modules/*/build/
+
+# Never package local credentials or legacy password modules.
+.secret.local
+secrets.js
+*service-account*.json
+*serviceAccount*.json
