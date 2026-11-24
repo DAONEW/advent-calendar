@@ -1,7 +1,5 @@
-// Initialize Firebase
-const auth = firebase.auth();
-
 let calendarData = null;
+let calendarUnlockedThrough = null;
 let authToken = localStorage.getItem('authToken');
 let availableYears = [];
 let currentYear = null;
@@ -39,6 +37,8 @@ function normalizeYear(year) {
     return year.toString();
 }
 let currentDoorDay = null;
+let currentDoorPhotoTitle = '';
+let currentDoorVideoTitle = '';
 let currentDoorHasVideo = false;
 let currentDoorImageUrl = null;
 let currentDoorVideoUrl = null;
@@ -73,9 +73,11 @@ function trackMediaUrl(url) {
 }
 
 function resetModalMedia() {
+    modalVideo?.style.removeProperty('--door-video-ratio');
     if (modalVideo) {
         modalVideo.pause();
         modalVideo.removeAttribute('src');
+        modalVideo.removeAttribute('poster');
         modalVideo.load();
         modalVideo.style.display = 'none';
     }
@@ -92,6 +94,9 @@ function resetModalMedia() {
     trackedMediaUrls.forEach(url => URL.revokeObjectURL(url));
     trackedMediaUrls = [];
     currentDoorDay = null;
+    currentDoorPhotoTitle = '';
+    currentDoorVideoTitle = '';
+    if (modalLegend) modalLegend.textContent = '';
     currentDoorHasVideo = false;
     currentDoorImageUrl = null;
     currentDoorVideoUrl = null;
@@ -112,18 +117,18 @@ function setMediaToggleButtonState(state) {
         return;
     }
 
-    let iconClasses = 'fa-play';
-    let label = 'Play live photo';
+    let iconClasses = 'fa-gift';
+    let label = 'Zum Video';
     let active = false;
     let disabled = false;
 
     if (state === 'loading') {
         iconClasses = 'fa-circle-notch fa-spin';
-        label = 'Loading video';
+        label = 'Video lädt …';
         disabled = true;
     } else if (state === 'show-image') {
         iconClasses = 'fa-image';
-        label = 'Show photo';
+        label = 'Zurück zum Foto';
         active = true;
     }
 
@@ -131,7 +136,7 @@ function setMediaToggleButtonState(state) {
     mediaToggleButton.classList.toggle('media-toggle--active', active);
     mediaToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
     mediaToggleButton.setAttribute('aria-label', label);
-    mediaToggleButton.innerHTML = `<span class="sr-only">${label}</span><i class="fas ${iconClasses}" aria-hidden="true"></i>`;
+    mediaToggleButton.innerHTML = `<i class="fas ${iconClasses}" aria-hidden="true"></i> <span>${label}</span>`;
 }
 
 function getMobilePreviewCache(year, { create = true } = {}) {
@@ -246,6 +251,7 @@ function showImageMedia() {
         return;
     }
 
+    if (modalLegend) modalLegend.textContent = currentDoorPhotoTitle;
     modalImage.style.display = 'block';
     modalImage.src = currentDoorImageUrl;
 
@@ -274,6 +280,7 @@ function showVideoMedia() {
         return;
     }
 
+    if (modalLegend) modalLegend.textContent = currentDoorVideoTitle;
     modalVideo.style.display = 'block';
     modalVideo.src = currentDoorVideoUrl;
     modalVideo.currentTime = 0;
@@ -293,25 +300,37 @@ function showVideoMedia() {
     }
 }
 
-async function fetchDoorVideo(day) {
-    const yearQuery = currentYear ? `?year=${currentYear}` : '';
-    const videoResponse = await fetch(`/api/door/${day}/video${yearQuery}`, {
-        headers: {
-            'Authorization': `Bearer ${authToken}`
+async function fetchDoorVideo(day, requestId = activeDoorRequestId) {
+    const year = currentYear;
+    const token = authToken;
+    const fetchChunk = async (chunk) => {
+        if (requestId !== activeDoorRequestId) throw new Error('Video request cancelled.');
+        const query = new URLSearchParams({ chunk: String(chunk) });
+        if (year) query.set('year', year);
+        const response = await fetch(`/api/door/${day}/video?${query}`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!response.ok) {
+            throw new Error(response.status === 404
+                ? 'No video is available for this day.' : 'Failed to load video.');
         }
-    });
-
-    if (!videoResponse.ok) {
-        const message = videoResponse.status === 404
-            ? 'No video is available for this day.'
-            : 'Failed to load video.';
-        throw new Error(message);
+        return response;
+    };
+    const first = await fetchChunk(0);
+    const parts = [await first.blob()];
+    const countHeader = first.headers.get('X-Video-Chunks');
+    if (countHeader === null) return URL.createObjectURL(parts[0]); // LAN server sends a full file.
+    const count = Number(countHeader);
+    const size = Number(first.headers.get('X-Video-Bytes'));
+    if (!Number.isSafeInteger(count) || count < 1 || count > 128 || !Number.isSafeInteger(size) || size < 1) {
+        throw new Error('Invalid video size.');
     }
-
-    const videoBlob = await videoResponse.blob();
-    const videoUrl = URL.createObjectURL(videoBlob);
-    trackMediaUrl(videoUrl);
-    return videoUrl;
+    for (let chunk = 1; chunk < count; chunk++) {
+        parts.push(await (await fetchChunk(chunk)).blob());
+    }
+    const video = new Blob(parts, { type: 'video/mp4' });
+    if (video.size !== size) throw new Error('Incomplete video.');
+    return URL.createObjectURL(video);
 }
 
 async function handleMediaToggleClick() {
@@ -324,19 +343,28 @@ async function handleMediaToggleClick() {
         return;
     }
 
+    const requestId = activeDoorRequestId;
     try {
         isVideoLoading = true;
         setMediaToggleButtonState('loading');
         if (!currentDoorVideoUrl) {
-            currentDoorVideoUrl = await fetchDoorVideo(currentDoorDay);
+            const url = await fetchDoorVideo(currentDoorDay);
+            if (requestId !== activeDoorRequestId) {
+                URL.revokeObjectURL(url);
+                return;
+            }
+            trackMediaUrl(url);
+            currentDoorVideoUrl = url;
         }
         showVideoMedia();
     } catch (error) {
+        if (requestId !== activeDoorRequestId) return;
         console.error('Error loading video content:', error);
-        alert(error.message || 'Unable to load the video right now. Please try again.');
+        showImageMedia();
         setMediaToggleButtonState('play');
+        if (modalNotice) modalNotice.textContent = 'Das Video konnte nicht geladen werden.';
     } finally {
-        isVideoLoading = false;
+        if (requestId === activeDoorRequestId) isVideoLoading = false;
     }
 }
 
@@ -612,7 +640,6 @@ async function checkPassword() {
         return;
     }
 
-    console.log('Attempting login with password length:', passwordInput.value.length);
     try {
         const response = await fetch('/auth', {
             method: 'POST',
@@ -625,7 +652,6 @@ async function checkPassword() {
 
         console.log('Login response status:', response.status);
         const data = await response.json();
-        console.log('Login response data:', data);
 
         if (data.success && data.token) {
             console.log('Login successful, token received');
@@ -649,6 +675,17 @@ async function checkPassword() {
     }
 }
 
+let calendarDateKey = null;
+function refreshCalendarForNewDate() {
+    const dateKey = new Date().toDateString();
+    if (!authToken || !currentYear || !calendarData || calendarDateKey === dateKey) return;
+    calendarDateKey = dateKey;
+    calendarPrefetchCache.delete(normalizeYear(currentYear));
+    void loadCalendarData();
+}
+window.addEventListener('focus', refreshCalendarForNewDate);
+setInterval(refreshCalendarForNewDate, 30000);
+
 async function loadCalendarData() {
     if (!currentYear) {
         console.warn('No year selected, attempting to use most recent available year');
@@ -670,6 +707,8 @@ async function loadCalendarData() {
 
         console.log('Calendar data received:', data);
         calendarData = data.doors || {};
+        calendarUnlockedThrough = Number.isInteger(data.unlockedThrough) ? data.unlockedThrough : null;
+        calendarDateKey = new Date().toDateString();
 
         const resolvedYear = normalizeYear(data.year);
         if (resolvedYear && resolvedYear !== currentYear) {
@@ -775,6 +814,20 @@ function createCalendar() {
             const icon = document.createElement('i');
             icon.className = `fas ${icons[i-1]}`;
             door.appendChild(icon);
+
+            if (doorData?.hasVideo) {
+                const gift = document.createElement('button');
+                gift.type = 'button';
+                gift.className = 'door-gift';
+                gift.setAttribute('aria-label', `Video-Geschenk für Türchen ${i}`);
+                gift.title = 'Zum Video';
+                gift.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v8h14v-8M12 8v12M12 8C6 8 6 2.5 9 4c1.3.6 2.2 2.2 3 4Zm0 0c6 0 6-5.5 3-4-1.3.6-2.2 2.2-3 4Z"/></svg>';
+                gift.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    void openDoor(i, { openVideo: true });
+                });
+                door.appendChild(gift);
+            }
         }
         
         grid.appendChild(door);
@@ -784,6 +837,10 @@ function createCalendar() {
 function isDoorLocked(day) {
     if (!currentYear) {
         return true;
+    }
+
+    if (calendarUnlockedThrough !== null) {
+        return day > calendarUnlockedThrough;
     }
 
     const viewingYear = parseInt(currentYear, 10);
@@ -861,7 +918,7 @@ async function preloadMobilePreview(day, options = {}) {
 }
 
 // Handle door opening
-async function openDoor(day) {
+async function openDoor(day, { openVideo = false } = {}) {
     const requestId = ++activeDoorRequestId;
     const doorYear = normalizeYear(currentYear);
     try {
@@ -889,6 +946,7 @@ async function openDoor(day) {
         }
 
         const doorData = await response.json();
+        if (requestId !== activeDoorRequestId) return;
         console.log('Door data received:', doorData);
 
         if (!doorData || !doorData.legend) {
@@ -905,9 +963,9 @@ async function openDoor(day) {
         if (modalContent) {
             modalContent.style.backgroundColor = doorColor;
         }
-        if (modalLegend) {
-            modalLegend.textContent = doorData.legend;
-        }
+        currentDoorPhotoTitle = doorData.legend;
+        currentDoorVideoTitle = doorData.videoLegend || currentDoorPhotoTitle;
+        if (modalLegend) modalLegend.textContent = currentDoorPhotoTitle;
         if (modalNotice) {
             modalNotice.textContent = '';
         }
@@ -916,6 +974,9 @@ async function openDoor(day) {
         modalShouldBeVisible = true;
         const hasVideo = Boolean(doorData.hasVideo ?? doorData.video);
         currentDoorHasVideo = hasVideo;
+        if (hasVideo && Number.isFinite(doorData.videoAspect) && doorData.videoAspect > 0) {
+            modalVideo?.style.setProperty('--door-video-ratio', doorData.videoAspect);
+        }
         currentDoorDay = day;
 
         if (mediaToggleButton) {
@@ -926,6 +987,11 @@ async function openDoor(day) {
             }
         }
 
+        if (openVideo && hasVideo) {
+            if (imageModal) imageModal.style.display = 'block';
+            void handleMediaToggleClick();
+        }
+        const canShowPhoto = () => !isVideoVisible && !(openVideo && isVideoLoading);
         let previewDisplayed = false;
         const previewCache = getMobilePreviewCache(doorYear);
         const previewPromise = (async () => {
@@ -941,10 +1007,7 @@ async function openDoor(day) {
                 const previewUrl = URL.createObjectURL(previewMedia.blob);
                 trackMediaUrl(previewUrl);
                 currentDoorImageUrl = previewUrl;
-                currentDoorVideoUrl = null;
-                isVideoVisible = false;
-                isVideoLoading = false;
-                showImageMedia();
+                if (canShowPhoto()) showImageMedia();
                 previewDisplayed = true;
             } catch (previewError) {
                 console.warn('Mobile preview not available for door', day, previewError);
@@ -977,7 +1040,7 @@ async function openDoor(day) {
                         return;
                     }
                     currentDoorImageUrl = mediaUrl;
-                    showImageMedia();
+                    if (canShowPhoto()) showImageMedia();
                 };
 
                 if (modalImage) {
@@ -1008,6 +1071,7 @@ async function openDoor(day) {
         void loadFullMedia();
 
     } catch (error) {
+        if (requestId !== activeDoorRequestId) return;
         modalShouldBeVisible = false;
         resetModalMedia();
         console.error('Error opening door:', error);
@@ -1040,26 +1104,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Snowfall effect
-let snowInterval;
+// Snowfall effect: reuse a fixed set of evenly staggered flakes.
+let snowflakes = [];
+
 function startSnowfall() {
-    snowInterval = setInterval(createSnowflake, 500);
+    if (snowflakes.length) return;
+    const fragment = document.createDocumentFragment();
+    const perSpeed = 14;
+    for (const duration of [22, 26, 30, 34]) {
+        const offset = Math.random();
+        for (let index = 0; index < perSpeed; index++) {
+            const phase = (offset + (index + 0.15 + Math.random() * 0.7) / perSpeed) % 1;
+            const snow = document.createElement('div');
+            snow.className = 'snowflake';
+            snow.textContent = '❄';
+            snow.setAttribute('aria-hidden', 'true');
+            snow.style.left = `${Math.random() * 100}vw`;
+            snow.style.animationDuration = `${duration}s`;
+            snow.style.animationDelay = `${-duration * phase}s`;
+            snowflakes.push(snow);
+            fragment.appendChild(snow);
+        }
+    }
+    document.body.appendChild(fragment);
 }
 
 function stopSnowfall() {
-    clearInterval(snowInterval);
-    document.querySelectorAll('.snowflake').forEach(snow => snow.remove());
-}
-
-function createSnowflake() {
-    const snow = document.createElement('div');
-    snow.className = 'snowflake';
-    snow.innerHTML = '❄';
-    snow.style.left = Math.random() * 100 + 'vw';
-    snow.style.animation = `snowfall ${Math.random() * 13 + 22}s linear`;
-    document.body.appendChild(snow);
-    
-    snow.addEventListener('animationend', () => snow.remove());
+    for (const snow of snowflakes) snow.remove();
+    snowflakes = [];
 }
 
 // Shooting stars

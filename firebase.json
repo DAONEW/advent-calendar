@@ -14,13 +14,26 @@
     ]
   },
   "functions": {
-    "source": "functions",
-    "gen": 2
+    "source": "functions"
   },
   "emulators": {
-    "functions": { "host": "0.0.0.0", "port": 5001 },
-    "hosting": { "host": "0.0.0.0", "port": 5000 },
-    "ui": {      "enabled": true    },
-    "singleProjectMode": true
+    "functions": {
+      "host": "127.0.0.1",
+      "port": 18051
+    },
+    "hosting": {
+      "host": "127.0.0.1",
+      "port": 18050
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true,
+    "hub": {
+      "port": 18400
+    },
+    "logging": {
+      "port": 18450
+    }
   }
 }

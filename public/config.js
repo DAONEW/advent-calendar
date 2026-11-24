@@ -1,5 +1,5 @@
 const siteConfig = {
-    authors: 'Lina Felsner & Leo Becker',
+    authors: 'Calendar contributors',
     sourceUrl: 'https://github.com/DAONEW/advent-calendar',
-    year: '2024'
+    year: '2026'
 };

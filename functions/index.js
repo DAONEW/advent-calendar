@@ -1,26 +1,29 @@
-const functions = require('firebase-functions');
+const { onRequest } = require('firebase-functions/v2/https');
+const { defineSecret } = require('firebase-functions/params');
+const { createHash, timingSafeEqual } = require('node:crypto');
 const express = require('express');
-const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
-const secrets = require('./secrets');
+const calendarPassword = defineSecret('CALENDAR_PASSWORD');
+const signingKey = defineSecret('CALENDAR_JWT_KEY');
+const digest = value => createHash('sha256').update(value).digest();
+const tokenAudience = 'advent-calendar-media';
+const tokenIssuer = 'advent-calendar';
 
 const app = express();
 
-// Middleware
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
-
-// Logging middleware
+app.disable('x-powered-by');
 app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
+    res.set('Cache-Control', 'private, no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
     next();
 });
+app.use(express.json({ limit: '2kb' }));
 
 // Calendar data handling
 const dataDirectory = path.join(__dirname, 'private', 'data');
-let calendarStore = {};
+let calendarStore = Object.create(null);
 let availableYears = [];
 let latestYear = null;
 
@@ -32,7 +35,7 @@ const loadCalendarStore = () => {
             .map(entry => entry.name)
             .sort((a, b) => a.localeCompare(b));
 
-        calendarStore = {};
+        calendarStore = Object.create(null);
         availableYears.forEach(year => {
             const calendarPath = path.join(dataDirectory, year, 'calendar.json');
             if (!fs.existsSync(calendarPath)) {
@@ -50,21 +53,19 @@ const loadCalendarStore = () => {
         });
 
         latestYear = availableYears[availableYears.length - 1] || null;
-        console.log(`Loaded calendar data for years: ${availableYears.join(', ')}`);
     } catch (error) {
         console.error('Error loading calendar directories:', error);
-        calendarStore = {};
+        calendarStore = Object.create(null);
         availableYears = [];
         latestYear = null;
     }
 };
 
 const getRequestedYear = (req) => {
-    const requestedYear = req.params.year || req.query.year;
-    if (requestedYear && calendarStore[requestedYear]) {
-        return requestedYear;
-    }
-    return latestYear;
+    const requestedYear = req.params.year ?? req.query.year;
+    if (requestedYear === undefined) return latestYear;
+    return typeof requestedYear === 'string' && Object.hasOwn(calendarStore, requestedYear)
+        ? requestedYear : null;
 };
 
 const getCalendarForRequest = (req) => {
@@ -77,54 +78,40 @@ const getCalendarForRequest = (req) => {
 
 loadCalendarStore();
 
-// Authentication endpoint
 app.post('/auth', (req, res) => {
-    console.log('Auth request received:', req.body);
-    const { password } = req.body;
-
-    if (!password) {
-        console.log('No password provided');
-        return res.status(401).json({ error: 'Password is required' });
+    const expected = calendarPassword.value();
+    const key = signingKey.value();
+    if (!expected || !key || Buffer.byteLength(key) < 32) {
+        return res.status(503).json({ error: 'Authentication unavailable' });
     }
-
-    if (password !== secrets.PASSWORD) {
-        console.log('Password validation failed');
+    const password = req.body?.password;
+    if (typeof password !== 'string' || !timingSafeEqual(digest(password), digest(expected))) {
         return res.status(401).json({ error: 'Invalid password' });
     }
-
-    try {
-        const token = jwt.sign({ authenticated: true }, 'your-secret-key', { expiresIn: '30d' });
-        console.log('JWT token generated successfully');
-        res.json({ success: true, token });
-    } catch (error) {
-        console.error('Error generating token:', error);
-        res.status(500).json({ error: 'Authentication failed' });
-    }
+    const token = jwt.sign({ authenticated: true }, key, {
+        algorithm: 'HS256', expiresIn: '7d', audience: tokenAudience, issuer: tokenIssuer,
+    });
+    return res.json({ success: true, token });
 });
 
-// Verify authentication middleware
 const verifyAuth = (req, res, next) => {
-    console.log('Verifying authentication');
-
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        console.log('Missing or invalid authorization header');
-        return res.status(401).json({ error: 'No token provided' });
+    const raw = req.get('Authorization') || '';
+    const match = /^Bearer ([A-Za-z0-9_.-]+)$/i.exec(raw);
+    const key = signingKey.value();
+    if (!match || !key || Buffer.byteLength(key) < 32) {
+        return res.status(401).json({ error: 'Sign in first' });
     }
-
-    const token = authHeader.split(' ')[1];
-    console.log('Token received for verification');
-
     try {
-        const decoded = jwt.verify(token, 'your-secret-key');
-        console.log('Token verified successfully');
-        req.user = decoded;
-        next();
-    } catch (error) {
-        console.error('Token verification failed:', error);
-        res.status(401).json({ error: 'Invalid token' });
+        const decoded = jwt.verify(match[1], key, {
+            algorithms: ['HS256'], audience: tokenAudience, issuer: tokenIssuer,
+        });
+        if (decoded.authenticated !== true || typeof decoded.exp !== 'number') {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+    } catch {
+        return res.status(401).json({ error: 'Invalid token' });
     }
+    return next();
 };
 
 // Verify authentication status
@@ -152,43 +139,38 @@ app.get('/api/calendar-data', verifyAuth, (req, res) => {
 const doorRoutes = ['/api/door/:day', '/api/year/:year/door/:day'];
 const doorImageRoutes = ['/api/door/:day/image', '/api/year/:year/door/:day/image'];
 app.get(doorRoutes, verifyAuth, (req, res) => {
-    const day = parseInt(req.params.day, 10);
-    console.log('Fetching data for door:', day);
+    const day = /^(?:[1-9]|1\d|2[0-4])$/.test(req.params.day) ? Number(req.params.day) : 0;
 
     const result = getCalendarForRequest(req);
     if (!result) {
-        console.log('No calendar data for request');
         return res.status(404).json({ error: 'Calendar data unavailable' });
     }
 
     const doorData = result.calendar[day?.toString()];
     if (!doorData) {
-        console.log(`Door not found for year ${result.year}:`, day);
         return res.status(404).json({ error: 'Door not found' });
     }
 
-    console.log('Found door data:', doorData);
     res.json({
         year: result.year,
         day,
         legend: doorData.legend,
-        hasVideo: Boolean(doorData.video)
+        hasVideo: Boolean(doorData.video),
+        videoAspect: doorData.videoAspect,
+        videoLegend: doorData.videoLegend
     });
 });
 
 app.get(doorImageRoutes, verifyAuth, (req, res) => {
-    const day = parseInt(req.params.day, 10);
-    console.log('Fetching image for door:', day);
+    const day = /^(?:[1-9]|1\d|2[0-4])$/.test(req.params.day) ? Number(req.params.day) : 0;
 
     const result = getCalendarForRequest(req);
     if (!result) {
-        console.log('No calendar data for request');
         return res.status(404).json({ error: 'Calendar data unavailable' });
     }
 
     const doorDataExists = result.calendar[day?.toString()];
     if (!doorDataExists) {
-        console.log(`Door not found for year ${result.year}:`, day);
         return res.status(404).json({ error: 'Door not found' });
     }
 
@@ -212,7 +194,6 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
     for (const suffix of sizeSuffixes) {
         for (const ext of possibleExtensions) {
             const testPath = path.join(basePath, `${day}${suffix}${ext}`);
-            console.log('Checking path:', testPath);
             if (fs.existsSync(testPath)) {
                 imagePath = testPath;
                 break outer;
@@ -221,7 +202,6 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
     }
 
     if (!imagePath) {
-        console.log(`Image not found for year ${result.year}, door:`, day);
         return res.status(404).json({ error: 'Image not found' });
     }
 
@@ -230,29 +210,24 @@ app.get(doorImageRoutes, verifyAuth, (req, res) => {
         res.type('image/heic');
     }
 
-    console.log('Serving image:', imagePath);
     res.sendFile(imagePath);
 });
 
 const doorVideoRoutes = ['/api/door/:day/video', '/api/year/:year/door/:day/video'];
 app.get(doorVideoRoutes, verifyAuth, (req, res) => {
-    const day = parseInt(req.params.day, 10);
-    console.log('Fetching video for door:', day);
+    const day = /^(?:[1-9]|1\d|2[0-4])$/.test(req.params.day) ? Number(req.params.day) : 0;
 
     const result = getCalendarForRequest(req);
     if (!result) {
-        console.log('No calendar data for request');
         return res.status(404).json({ error: 'Calendar data unavailable' });
     }
 
     const doorData = result.calendar[day?.toString()];
     if (!doorData) {
-        console.log(`Door not found for year ${result.year}:`, day);
         return res.status(404).json({ error: 'Door not found' });
     }
 
     if (!doorData.video) {
-        console.log(`Video not flagged for year ${result.year}, door:`, day);
         return res.status(404).json({ error: 'Video not available' });
     }
 
@@ -262,7 +237,6 @@ app.get(doorVideoRoutes, verifyAuth, (req, res) => {
 
     for (const ext of possibleVideoExtensions) {
         const testPath = path.join(basePath, `${day}${ext}`);
-        console.log('Checking video path:', testPath);
         if (fs.existsSync(testPath)) {
             videoPath = testPath;
             break;
@@ -270,14 +244,31 @@ app.get(doorVideoRoutes, verifyAuth, (req, res) => {
     }
 
     if (!videoPath) {
-        console.log(`Video not found for year ${result.year}, door:`, day);
         return res.status(404).json({ error: 'Video not found' });
     }
 
-    console.log('Serving video:', videoPath);
     res.type('video/mp4');
-    res.sendFile(videoPath);
+    if (req.query.chunk === undefined) return res.sendFile(videoPath);
+
+    const chunkSize = 8 * 1024 * 1024;
+    const totalBytes = fs.statSync(videoPath).size;
+    const totalChunks = Math.ceil(totalBytes / chunkSize);
+    const requested = req.query.chunk;
+    const chunk = typeof requested === 'string' && /^(0|[1-9]\d{0,5})$/.test(requested)
+        ? Number(requested) : -1;
+    if (chunk < 0 || chunk >= totalChunks) {
+        return res.status(416).json({ error: 'Video chunk unavailable' });
+    }
+    const start = chunk * chunkSize;
+    const end = Math.min(totalBytes, start + chunkSize) - 1;
+    res.set({ 'X-Video-Chunks': String(totalChunks), 'X-Video-Bytes': String(totalBytes),
+        'Content-Length': String(end - start + 1) });
+    if (req.method === 'HEAD') return res.end();
+    const stream = fs.createReadStream(videoPath, { start, end });
+    res.on('close', () => stream.destroy());
+    stream.on('error', () => res.destroy());
+    return stream.pipe(res);
 });
 
 // Export the Express app as a Firebase Cloud Function
-exports.app = functions.https.onRequest(app);
+exports.app = onRequest({ secrets: [calendarPassword, signingKey] }, app);

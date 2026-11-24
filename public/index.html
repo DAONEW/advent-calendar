@@ -17,7 +17,7 @@
     <!-- Password overlay -->
     <div id="passwordOverlay" class="password-overlay">
         <div class="password-container">
-            <h2>Welcome to Nora's Advent Calendar</h2>
+            <h2>Welcome to Advent Calendar</h2>
             <div class="password-input-container">
                 <input type="password" id="passwordInput" placeholder="Enter password">
                 <button id="submitPassword">Enter</button>
@@ -29,7 +29,7 @@
     <div class="content-wrapper">
         <div id="mainContent" style="display: none;">
             <h1 class="page-title">
-                Nora's Advent<span class="title-word-calendar">&nbsp;Calendar</span>
+                Advent<span class="title-word-calendar">&nbsp;Calendar</span>
                 <div class="year-select-wrapper" id="yearSelectWrapper">
                     <label for="yearSelectToggle" class="sr-only">Select calendar year</label>
                     <button
@@ -65,18 +65,13 @@
                     <div class="modal-media-wrapper">
                         <img id="modalImage" src="" alt="Day visual">
                         <video id="modalVideo" controls playsinline preload="metadata"></video>
-                        <button
-                            id="mediaToggleButton"
-                            class="media-toggle"
-                            type="button"
-                            hidden
-                            aria-pressed="false"
-                        >
-                            <span class="sr-only">Play live photo</span>
-                            <i class="fas fa-play" aria-hidden="true"></i>
+                    </div>
+                    <div class="modal-caption">
+                        <p id="modalLegend" class="legend"></p>
+                        <button id="mediaToggleButton" class="media-toggle" type="button" hidden aria-pressed="false">
+                            <i class="fas fa-gift" aria-hidden="true"></i> <span>Zum Video</span>
                         </button>
                     </div>
-                    <p id="modalLegend" class="legend"></p>
                     <p id="modalNotice" class="media-note" aria-live="polite"></p>
                 </div>
             </div>
@@ -87,9 +82,6 @@
         </div>
     </div>
 
-    <script src="/__/firebase/9.0.0/firebase-app-compat.js"></script>
-    <script src="/__/firebase/9.0.0/firebase-auth-compat.js"></script>
-    <script src="/__/firebase/init.js"></script>
     <script src="config.js"></script>
     <script src="app.js"></script>  
 </body>
